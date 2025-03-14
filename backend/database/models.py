@@ -109,6 +109,20 @@ class Bid(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     created_at = models.DateTimeField(auto_now_add=True)
 
+class Transaction(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('confirmed', 'Confirmed'),
+        ('shipped', 'Shipped'),
+        ('delivered', 'Delivered'),
+        ('cancelled', 'Cancelled')
+    ]
+    id=models.UUIDField(default=uuid.uuid4,primary_key=True)
+    bid = models.ForeignKey(Bid,on_delete=models.CASCADE)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
 # Orders Model (Finalized Transactions)
 class Order(models.Model):
     STATUS_CHOICES = [
