@@ -1,155 +1,136 @@
-from rest_framework.generics import GenericAPIView
-from rest_framework.mixins import CreateModelMixin, RetrieveModelMixin, UpdateModelMixin, DestroyModelMixin
-from .models import Transaction,Order,Payment
-from .serializers import TransactionSerializer,OrderSerializer,PaymentSerializer
-from django.shortcuts import get_object_or_404
-from rest_framework.generics import CreateAPIView, ListAPIView, RetrieveAPIView, UpdateAPIView
+from rest_framework.views import APIView
+from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.status import HTTP_400_BAD_REQUEST, HTTP_201_CREATED, HTTP_200_OK
+from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
-from database.models import Transaction, Listings, Order, Payment
-from .serializers import TransactionSerializer, OrderSerializer, PaymentSerializer
-from django.core.exceptions import PermissionDenied
+from rest_framework.authentication import JWTAuthentication
+from database.models import Transaction, Listings,Order,Payment
+from .serializers import TransactionSerializer,OrderSerializer,PaymentSerializer
 from django.utils.timezone import now
 
-class TransactionListView(ListAPIView):
+class TransactionView(APIView):
     permission_classes = [IsAuthenticated]
     authentication_classes = [JWTAuthentication]
-    serializer_class = TransactionSerializer
 
-    def get_queryset(self):
-        return Transaction.objects.filter(buyer=self.request.user)  # Show transactions for the logged-in user
+    def get(self, request, transaction_id=None):
+        """Retrieve a single transaction or list all transactions for the logged-in user."""
+        if transaction_id:
+            transaction = get_object_or_404(Transaction, id=transaction_id, buyer=request.user)
+            serializer = TransactionSerializer(transaction)
+        else:
+            transactions = Transaction.objects.filter(buyer=request.user)
+            serializer = TransactionSerializer(transactions, many=True)
+        return Response(serializer.data, status=HTTP_200_OK)
+
+    def post(self, request):
+        """Create a new transaction."""
+        serializer = TransactionSerializer(data=request.data)
+        if serializer.is_valid():
+            listing_id = request.data.get("listing")
+            listing = get_object_or_404(Listings, id=listing_id)
+
+            if listing.seller == request.user:
+                raise PermissionDenied("You cannot purchase your own listing.")
+
+            transaction = serializer.save(buyer=request.user, seller=listing.seller, listing=listing, status="Pending")
+            return JsonResponse({"message": "Transaction created successfully", "transaction_id": transaction.id}, status=HTTP_201_CREATED)
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+
+    def put(self, request, transaction_id):
+        """Update a transaction status (only by the seller)."""
+        transaction = get_object_or_404(Transaction, id=transaction_id, seller=request.user)
+        serializer = TransactionSerializer(transaction, data=request.data, partial=True)
+
+        if serializer.is_valid():
+            serializer.save()
+            return JsonResponse({"message": "Transaction updated successfully", "data": serializer.data}, status=HTTP_200_OK)
+
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
 
 
-class TransactionCreateView(CreateAPIView):
+class OrderView(APIView):
     permission_classes = [IsAuthenticated]
     authentication_classes = [JWTAuthentication]
-    serializer_class = TransactionSerializer
 
-    def perform_create(self, serializer):
-        listing_id = self.request.data.get("listing")
-        listing = get_object_or_404(Listings, id=listing_id)
-        if listing.seller == self.request.user:
-            raise PermissionDenied("You cannot purchase your own listing.")
-        transaction = serializer.save(buyer=self.request.user, seller=listing.seller, listing=listing, status="Pending")
-        return JsonResponse({"message": "Transaction created successfully", "transaction_id": transaction.id})
+    def get(self, request, order_id=None):
+        """Retrieve a single order or list all orders for the logged-in user."""
+        if order_id:
+            order = get_object_or_404(Order, id=order_id, user=request.user)
+            serializer = OrderSerializer(order)
+        else:
+            orders = Order.objects.filter(user=request.user)
+            serializer = OrderSerializer(orders, many=True)
+        return Response(serializer.data, status=HTTP_200_OK)
 
+    def post(self, request):
+        """Create a new order."""
+        serializer = OrderSerializer(data=request.data)
+        if serializer.is_valid():
+            order = serializer.save(user=request.user, status="Pending")
+            return JsonResponse({"message": "Order created successfully", "order_id": order.id}, status=HTTP_201_CREATED)
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
 
-class TransactionDetailView(RetrieveAPIView):
-    permission_classes = [IsAuthenticated]
-    authentication_classes = [JWTAuthentication]
-    serializer_class = TransactionSerializer
+    def put(self, request, order_id):
+        """Update an order (only by the user who placed it)."""
+        order = get_object_or_404(Order, id=order_id, user=request.user)
+        serializer = OrderSerializer(order, data=request.data, partial=True)
 
-    def get_queryset(self):
-        return Transaction.objects.filter(buyer=self.request.user)  # Ensure user can only see their transactions
+        if serializer.is_valid():
+            serializer.save()
+            return JsonResponse({"message": "Order updated successfully", "data": serializer.data}, status=HTTP_200_OK)
 
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
 
-class TransactionUpdateView(UpdateAPIView):
-    permission_classes = [IsAuthenticated]
-    authentication_classes = [JWTAuthentication]
-    serializer_class = TransactionSerializer
-    queryset = Transaction.objects.all()
-
-    def get_queryset(self):
-        return Transaction.objects.filter(seller=self.request.user)  # Seller can update the transaction status
-
-    def update(self, request, *args, **kwargs):
-        response = super().update(request, *args, **kwargs)
-        return JsonResponse({"message": "Transaction updated successfully", "data": response.data})
-
-
-# Order Views
-class OrderListView(ListAPIView):
-    permission_classes = [IsAuthenticated]
-    authentication_classes = [JWTAuthentication]
-    serializer_class = OrderSerializer
-
-    def get_queryset(self):
-        return Order.objects.filter(user=self.request.user)  # Show orders for the logged-in user
-
-
-class OrderCreateView(CreateAPIView):
-    permission_classes = [IsAuthenticated]
-    authentication_classes = [JWTAuthentication]
-    serializer_class = OrderSerializer
-
-    def perform_create(self, serializer):
-        order = serializer.save(user=self.request.user, status="Pending")
-        return JsonResponse({"message": "Order created successfully", "order_id": order.id})
-
-
-class OrderDetailView(RetrieveAPIView):
-    permission_classes = [IsAuthenticated]
-    authentication_classes = [JWTAuthentication]
-    serializer_class = OrderSerializer
-
-    def get_queryset(self):
-        return Order.objects.filter(user=self.request.user)  # Ensure user can only see their orders
-
-
-class OrderUpdateView(UpdateAPIView):
-    permission_classes = [IsAuthenticated]
-    authentication_classes = [JWTAuthentication]
-    serializer_class = OrderSerializer
-    queryset = Order.objects.all()
-
-    def get_queryset(self):
-        return Order.objects.filter(user=self.request.user)  # User can update their order status
-
-    def update(self, request, *args, **kwargs):
-        response = super().update(request, *args, **kwargs)
-        return JsonResponse({"message": "Order updated successfully", "data": response.data})
-
-
-class OrderCancelView(UpdateAPIView):
-    permission_classes = [IsAuthenticated]
-    authentication_classes = [JWTAuthentication]
-    serializer_class = OrderSerializer
-    queryset = Order.objects.all()
-
-    def get_queryset(self):
-        return Order.objects.filter(user=self.request.user, status="Pending")
-
-    def update(self, request, *args, **kwargs):
-        order = self.get_object()
+    def delete(self, request, order_id):
+        """Cancel an order (only if it's still pending)."""
+        order = get_object_or_404(Order, id=order_id, user=request.user, status="Pending")
         order.status = "Cancelled"
         order.save()
-        return JsonResponse({"message": "Order cancelled successfully", "order_id": order.id})
+        return JsonResponse({"message": "Order cancelled successfully", "order_id": order.id}, status=HTTP_200_OK)
 
 
-# Payment Views
-class PaymentCreateView(CreateAPIView):
+
+class PaymentView(APIView):
     permission_classes = [IsAuthenticated]
     authentication_classes = [JWTAuthentication]
-    serializer_class = PaymentSerializer
 
-    def perform_create(self, serializer):
-        transaction_id = self.request.data.get("transaction")
-        transaction = get_object_or_404(Transaction, id=transaction_id)
-        if transaction.buyer != self.request.user:
-            raise PermissionDenied("You can only make payments for your own transactions.")
-        if transaction.status == "Paid":
-            return JsonResponse({"message": "Transaction is already paid."}, status=400)
+    def get(self, request, payment_id=None):
+        """Retrieve a single payment or list all payments made by the user."""
+        if payment_id:
+            payment = get_object_or_404(Payment, id=payment_id, user=request.user)
+            serializer = PaymentSerializer(payment)
+        else:
+            payments = Payment.objects.filter(user=request.user)
+            serializer = PaymentSerializer(payments, many=True)
+        return Response(serializer.data, status=HTTP_200_OK)
+
+    def post(self, request):
+        """Process a new payment for a transaction."""
+        serializer = PaymentSerializer(data=request.data)
+        if serializer.is_valid():
+            transaction_id = request.data.get("transaction")
+            transaction = get_object_or_404(Transaction, id=transaction_id)
+
+            if transaction.buyer != request.user:
+                raise PermissionDenied("You can only make payments for your own transactions.")
+            if transaction.status == "Paid":
+                return JsonResponse({"message": "Transaction is already paid."}, status=HTTP_400_BAD_REQUEST)
+
+            payment = serializer.save(user=request.user, transaction=transaction, status="Completed", timestamp=now())
+            transaction.status = "Paid"
+            transaction.save()
+
+            order = Order.objects.filter(transaction=transaction).first()
+            if order:
+                order.status = "Paid"
+                order.save()
+
+            return JsonResponse({"message": "Payment processed successfully", "payment_id": payment.id}, status=HTTP_201_CREATED)
         
-        payment = serializer.save(user=self.request.user, transaction=transaction, status="Completed", timestamp=now())
-        transaction.status = "Paid"
-        transaction.save()
-        
-        order = Order.objects.filter(transaction=transaction).first()
-        if order:
-            order.status = "Paid"
-            order.save()
-        
-        return JsonResponse({"message": "Payment processed successfully", "payment_id": payment.id})
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
 
-
-class PaymentDetailView(RetrieveAPIView):
-    permission_classes = [IsAuthenticated]
-    authentication_classes = [JWTAuthentication]
-    serializer_class = PaymentSerializer
-
-    def get_queryset(self):
-        return Payment.objects.filter(user=self.request.user)
 
 
 
